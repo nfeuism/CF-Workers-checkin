@@ -1,0 +1,10 @@
+name = "69yun"
+main = "worker.js"
+compatibility_date = "2024-01-01"
+
+[vars]
+JC = "china.69yun69.net"
+ZH = "13080727749@163.com"
+
+[triggers]
+crons = ["0 14 * * *"]
