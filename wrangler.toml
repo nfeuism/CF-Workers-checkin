@@ -2,6 +2,9 @@ name = "69yun"
 main = "worker.js"
 compatibility_date = "2024-01-01"
 
+[assets]
+enabled = false
+
 [vars]
 JC = "china.69yun69.net"
 ZH = "13080727749@163.com"
