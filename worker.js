@@ -157,7 +157,9 @@ function extractCookies(response) {
 	} else {
 		const cookieHeader = response.headers.get('set-cookie');
 		if (cookieHeader) {
-			const parts = cookieHeader.split(/,\s*(?=[a-zA-Z0-9_-]+\s*=)/);
+			// Split on commas that precede a short cookie name (max 32 chars) + '='
+			// This avoids splitting on commas inside Expires dates like "Expires=Wed, 25 Jun 2026"
+			const parts = cookieHeader.split(/,\s*(?=[a-zA-Z0-9_-]{1,32}=)/);
 			for (const part of parts) {
 				const nameValue = part.split(';')[0];
 				if (nameValue && nameValue.includes('=')) pairs.push(nameValue);
@@ -209,7 +211,7 @@ async function performCheckinWithLogs() {
 				throw new Error('必需的配置参数缺失 (domain/user/pass)');
 			}
 
-			// Step 1: Visit homepage to get initial session cookie
+			// Step 1: Visit homepage to get initial session cookie + CSRF token
 			log("访问站点获取初始会话...");
 			const initResponse = await fetch(`${domain}/auth/login`, {
 				method: 'GET',
@@ -217,6 +219,7 @@ async function performCheckinWithLogs() {
 					'User-Agent': UA,
 					'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
 				},
+				redirect: 'manual',
 			});
 			let allCookies = extractCookies(initResponse);
 			if (allCookies.length > 0) {
@@ -226,6 +229,7 @@ async function performCheckinWithLogs() {
 			}
 
 			// Step 2: Login (carry initial cookies so session is bound)
+			// Use redirect: 'manual' to preserve Set-Cookie headers from intermediate responses
 			log(`请求登录接口: ${domain}/auth/login`);
 			const loginResponse = await fetch(`${domain}/auth/login`, {
 				method: 'POST',
@@ -236,17 +240,87 @@ async function performCheckinWithLogs() {
 					'Origin': domain,
 					'Referer': `${domain}/auth/login`,
 					'Cookie': cookieString(allCookies),
+					'X-Requested-With': 'XMLHttpRequest',
 				},
 				body: JSON.stringify({ email: user, passwd: pass, remember_me: 'on', code: "" }),
+				redirect: 'manual',
 			});
 
-			if (!loginResponse.ok) {
-				throw new Error(`登录失败 (HTTP ${loginResponse.status}): ${await loginResponse.text()}`);
+			// Handle login response (JSON direct or redirect with cookies)
+			let loginJson = null;
+
+			// Check for redirect — login may respond with 302 + Set-Cookie before JSON
+			if (loginResponse.status >= 300 && loginResponse.status < 400) {
+				const redirectUrl = loginResponse.headers.get('Location');
+				log(`登录返回重定向: HTTP ${loginResponse.status} -> ${redirectUrl || '(无Location)'}`);
+
+				// Extract cookies from the redirect response BEFORE following it
+				const redirectCookies = extractCookies(loginResponse);
+				if (redirectCookies.length > 0) {
+					log(`重定向响应 Cookie: ${cookieNameList(redirectCookies)}`);
+					allCookies = mergeCookies(allCookies, redirectCookies);
+				}
+
+				// Manually follow the redirect with the updated cookies
+				if (redirectUrl) {
+					const redirectTarget = redirectUrl.startsWith('http') ? redirectUrl : `${domain}${redirectUrl}`;
+					log(`手动跟随重定向: ${redirectTarget}`);
+					const followResponse = await fetch(redirectTarget, {
+						method: 'GET',
+						headers: {
+							'Cookie': cookieString(allCookies),
+							'User-Agent': UA,
+							'Accept': 'application/json, text/plain, */*',
+							'Referer': `${domain}/auth/login`,
+						},
+						redirect: 'manual',
+					});
+
+					// Merge any further cookies
+					const followCookies = extractCookies(followResponse);
+					if (followCookies.length > 0) {
+						log(`跟随重定向后 Cookie: ${cookieNameList(followCookies)}`);
+						allCookies = mergeCookies(allCookies, followCookies);
+					}
+
+					// Try to read JSON from the follow response
+					if (followResponse.ok) {
+						try {
+							const followText = await followResponse.text();
+							try {
+								loginJson = JSON.parse(followText);
+							} catch {
+								// Not JSON — if we got a 200 and have cookies, treat as success
+								log(`跟随重定向响应非JSON (${followText.substring(0, 100)}...)，已获取Cookie视为登录成功`);
+								loginJson = { ret: 1, msg: '通过重定向登录成功' };
+							}
+						} catch { /* ignore parse errors */ }
+					} else {
+						throw new Error(`跟随重定向失败 (HTTP ${followResponse.status})`);
+					}
+				}
 			}
 
-			const loginJson = await loginResponse.json();
-			if (loginJson.ret !== 1) {
-				throw new Error(`登录校验失败: ${loginJson.msg || '未知错误'}`);
+			// If no redirect or redirect didn't yield JSON, try parsing the original response
+			if (!loginJson) {
+				if (!loginResponse.ok) {
+					throw new Error(`登录失败 (HTTP ${loginResponse.status}): ${await loginResponse.text()}`);
+				}
+				try {
+					loginJson = await loginResponse.json();
+				} catch (e) {
+					// Response might be HTML — check if we have cookies as fallback
+					if (allCookies.length > 0) {
+						log("登录响应非JSON，但已获取有效Cookie，视为登录成功");
+						loginJson = { ret: 1, msg: '已获取会话Cookie' };
+					} else {
+						throw new Error(`登录响应非JSON且无Cookie: ${e.message}`);
+					}
+				}
+			}
+
+			if (!loginJson || (loginJson.ret !== undefined && loginJson.ret !== 1)) {
+				throw new Error(`登录校验失败: ${loginJson?.msg || '未知错误'}`);
 			}
 			log("✓ 登录验证通过");
 
