@@ -320,7 +320,8 @@ async function performCheckinWithLogs() {
 			}
 
 			if (!loginJson || (loginJson.ret !== undefined && loginJson.ret !== 1)) {
-				throw new Error(`登录校验失败: ${loginJson?.msg || '未知错误'}`);
+				const errMsg = (loginJson && loginJson.msg) ? loginJson.msg : '未知错误';
+				throw new Error(`登录校验失败: ${errMsg}`);
 			}
 			log("✓ 登录验证通过");
 
