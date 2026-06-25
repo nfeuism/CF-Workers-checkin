@@ -755,7 +755,7 @@ const HTML_TEMPLATE = `
           <button class="clear-btn" id="btn-clear-log">清空</button>
         </div>
         <div class="console-body" id="console-output">
-          <div class="log-entry"><span class="log-time">[${new Date().toLocaleTimeString('zh-CN', { hour12: false })}]</span><span class="log-success">控制台初始化完成...等待操作。</span></div>
+          <div class="log-entry"><span class="log-time">[${new Date().toISOString().slice(11, 19)}]</span><span class="log-success">控制台初始化完成...等待操作。</span></div>
         </div>
       </div>
     </div>
@@ -793,7 +793,7 @@ const HTML_TEMPLATE = `
     function appendLog(message, type = 'info') {
       const entry = document.createElement('div');
       entry.className = 'log-entry';
-      const time = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+      const time = new Date().toISOString().slice(11, 19);
       let formattedMsg = message;
       
       if(typeof message === 'object') {
